@@ -1,0 +1,19 @@
+{
+  "name": "discordinvitebot",
+  "version": "1.0.0",
+  "main": "bot.js",
+  "description": "Discord bot that tracks invites and rewards members with customizable roles",
+  "scripts": {
+    "start": "node bot.js",
+    "dev": "node bot.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["discord", "bot", "invites", "tracking", "rewards"],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.26.2",
+    "dotenv": "^17.4.1",
+    "sqlite3": "^6.0.1"
+  }
+}
