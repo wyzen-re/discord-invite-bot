@@ -68,6 +68,20 @@ class InviteDatabase {
       )
     `);
 
+    // Member tracking table (for retention analytics)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS member_tracking (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        inviter_id TEXT,
+        joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        left_at DATETIME,
+        status TEXT DEFAULT 'active',
+        UNIQUE(guild_id, user_id)
+      )
+    `);
+
     console.log('📊 Database tables initialized');
   }
 
@@ -178,15 +192,18 @@ class InviteDatabase {
    */
   getLeaderboard(guildId, limit = 10) {
     try {
-      const stmt = this.db.prepare(
-        `SELECT ci.creator_id, COUNT(*) as invite_count 
-         FROM invite_uses iu
-         JOIN custom_invites ci ON iu.invite_code = ci.invite_code
-         WHERE iu.guild_id = ? 
-         GROUP BY ci.creator_id 
-         ORDER BY invite_count DESC 
-         LIMIT ?`
-      );
+      const stmt = this.db.prepare(`
+        SELECT 
+          inviter_id,
+          COUNT(*) as total,
+          SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as stayed,
+          SUM(CASE WHEN status = 'left' THEN 1 ELSE 0 END) as left
+        FROM member_tracking
+        WHERE guild_id = ? AND inviter_id IS NOT NULL
+        GROUP BY inviter_id
+        ORDER BY total DESC
+        LIMIT ?
+      `);
       return stmt.all(guildId, limit) || [];
     } catch (error) {
       console.error('Error getting leaderboard:', error);
@@ -326,6 +343,92 @@ class InviteDatabase {
       return true;
     } catch (error) {
       console.error('Error removing reward:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Track member join
+   */
+  trackMemberJoin(guildId, userId, inviterId = null) {
+    try {
+      const stmt = this.db.prepare(`
+        INSERT OR REPLACE INTO member_tracking (guild_id, user_id, inviter_id, status)
+        VALUES (?, ?, ?, 'active')
+      `);
+      stmt.run(guildId, userId, inviterId);
+      return true;
+    } catch (error) {
+      console.error('Error tracking member join:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Track member leave
+   */
+  trackMemberLeave(guildId, userId) {
+    try {
+      const stmt = this.db.prepare(`
+        UPDATE member_tracking
+        SET status = 'left', left_at = CURRENT_TIMESTAMP
+        WHERE guild_id = ? AND user_id = ?
+      `);
+      stmt.run(guildId, userId);
+      return true;
+    } catch (error) {
+      console.error('Error tracking member leave:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get inviter retention stats
+   */
+  getInviterStats(guildId, inviterId) {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT
+          COUNT(*) as total,
+          SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as stayed,
+          SUM(CASE WHEN status = 'left' THEN 1 ELSE 0 END) as left
+        FROM member_tracking
+        WHERE guild_id = ? AND inviter_id = ?
+      `);
+      const result = stmt.get(guildId, inviterId);
+      return result || { total: 0, stayed: 0, left: 0 };
+    } catch (error) {
+      console.error('Error getting inviter stats:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get guild-wide discovery analytics
+   */
+  getGuildAnalytics(guildId) {
+    try {
+      const discoveryStats = this.db.prepare(`
+        SELECT method, COUNT(*) as count FROM discovery_methods
+        WHERE guild_id = ?
+        GROUP BY method
+      `).all(guildId);
+
+      const retentionStats = this.db.prepare(`
+        SELECT
+          COUNT(*) as total_members,
+          SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_members,
+          SUM(CASE WHEN status = 'left' THEN 1 ELSE 0 END) as left_members
+        FROM member_tracking
+        WHERE guild_id = ?
+      `).get(guildId);
+
+      return {
+        discovery: discoveryStats || [],
+        retention: retentionStats || { total_members: 0, active_members: 0, left_members: 0 }
+      };
+    } catch (error) {
+      console.error('Error getting guild analytics:', error);
       throw error;
     }
   }

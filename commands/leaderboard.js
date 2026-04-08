@@ -38,7 +38,7 @@ module.exports = {
         const username = user?.user.username || 'Unknown User';
         
         const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
-        description += `${medal} **${username}** - ${entry.invite_count} invites\n`;
+        description += `${medal} **${username}**\n   Total: ${entry.total} | Stayed: ${entry.stayed} | Left: ${entry.left}\n`;
       }
 
       const embed = new EmbedBuilder()

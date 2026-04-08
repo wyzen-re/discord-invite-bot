@@ -18,8 +18,7 @@ module.exports = {
     const guildId = interaction.guildId;
 
     try {
-      const inviteCount = await db.getInviteCount(guildId, targetUser.id);
-      const userInvites = await db.getUserInvites(guildId, targetUser.id);
+      const stats = await db.getInviterStats(guildId, targetUser.id);
 
       const embed = new EmbedBuilder()
         .setColor('#00ffff')
@@ -29,21 +28,22 @@ module.exports = {
           { 
             name: 'User', 
             value: `${targetUser.username}`, 
-            inline: true 
-          },
-          { 
-            name: 'Total Invites', 
-            value: `**${inviteCount}**`, 
-            inline: true 
-          },
-          { 
-            name: 'Recent Invites', 
-            value: userInvites.length > 0 
-              ? userInvites.slice(0, 5).map((inv, i) => 
-                  `${i + 1}. <t:${Math.floor(new Date(inv.timestamp).getTime() / 1000)}:R>`
-                ).join('\n')
-              : 'No recent invites',
             inline: false 
+          },
+          { 
+            name: 'Total', 
+            value: `**${stats.total || 0}**`, 
+            inline: true 
+          },
+          { 
+            name: 'Stayed', 
+            value: `**${stats.stayed || 0}**`, 
+            inline: true 
+          },
+          { 
+            name: 'Left', 
+            value: `**${stats.left || 0}**`, 
+            inline: true 
           }
         )
         .setTimestamp();

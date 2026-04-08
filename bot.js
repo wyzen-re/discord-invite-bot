@@ -44,6 +44,9 @@ client.on('guildMemberAdd', async (member) => {
     const guild = member.guild;
     console.log(`\n👤 ${member.user.tag} joined ${guild.name}!`);
     
+    // Track member join (will update when they respond to survey)
+    await db.trackMemberJoin(guild.id, member.id);
+    
     // Send welcome survey to new member
     try {
       const embed = new EmbedBuilder()
@@ -111,7 +114,7 @@ client.on('interactionCreate', async (interaction) => {
                 new TextInputBuilder()
                   .setCustomId('invite_code')
                   .setLabel('What was your invite code?')
-                  .setPlaceholder('e.g., WYZEN-ABC123')
+                  .setPlaceholder('e.g., abcde-12345')
                   .setStyle(TextInputStyle.Short)
                   .setRequired(true)
               )
@@ -271,6 +274,16 @@ client.on('interactionCreate', async (interaction) => {
     }
   } catch (error) {
     console.error('Error in interactionCreate:', error);
+  }
+});
+
+// Track member leave
+client.on('guildMemberRemove', async (member) => {
+  try {
+    console.log(`\n👋 ${member.user.tag} left ${member.guild.name}`);
+    await db.trackMemberLeave(member.guild.id, member.id);
+  } catch (error) {
+    console.error('Error tracking member leave:', error);
   }
 });
 
