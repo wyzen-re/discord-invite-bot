@@ -12,6 +12,19 @@ class InviteDatabase {
   initialize() {
     // Custom invites table
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS discovery_methods (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        method TEXT NOT NULL,
+        inviter_id TEXT,
+        custom_reason TEXT,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(guild_id, user_id)
+      )
+    `);
+
+    this.db.exec(`
       CREATE TABLE IF NOT EXISTS custom_invites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         guild_id TEXT NOT NULL,
@@ -113,11 +126,10 @@ class InviteDatabase {
    */
   getInviteCount(guildId, userId) {
     try {
-      const stmt = this.db.prepare(
-        `SELECT COUNT(*) as count FROM invite_uses iu
-         JOIN custom_invites ci ON iu.invite_code = ci.invite_code
-         WHERE iu.guild_id = ? AND ci.creator_id = ?`
-      );
+      const stmt = this.db.prepare(`
+        SELECT COUNT(*) as count FROM discovery_methods
+        WHERE guild_id = ? AND method = 'invite' AND inviter_id = ?
+      `);
       const result = stmt.get(guildId, userId);
       return result?.count || 0;
     } catch (error) {
@@ -194,6 +206,59 @@ class InviteDatabase {
       return result?.creator_id || null;
     } catch (error) {
       console.error('Error getting invite creator:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get invite by code
+   */
+  getInviteByCode(code) {
+    try {
+      const stmt = this.db.prepare(
+        `SELECT * FROM custom_invites WHERE invite_code = ?`
+      );
+      return stmt.get(code) || null;
+    } catch (error) {
+      console.error('Error getting invite by code:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Record discovery method
+   */
+  recordDiscoveryMethod(guildId, userId, method, inviterId, customReason = null) {
+    try {
+      const stmt = this.db.prepare(`
+        INSERT INTO discovery_methods (guild_id, user_id, method, inviter_id, custom_reason)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(guild_id, user_id) DO UPDATE SET
+          method = excluded.method,
+          inviter_id = excluded.inviter_id,
+          custom_reason = excluded.custom_reason
+      `);
+      stmt.run(guildId, userId, method, inviterId, customReason);
+      return true;
+    } catch (error) {
+      console.error('Error recording discovery method:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get discovery stats for a guild
+   */
+  getDiscoveryStats(guildId) {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT method, COUNT(*) as count FROM discovery_methods
+        WHERE guild_id = ?
+        GROUP BY method
+      `);
+      return stmt.all(guildId) || [];
+    } catch (error) {
+      console.error('Error getting discovery stats:', error);
       throw error;
     }
   }
