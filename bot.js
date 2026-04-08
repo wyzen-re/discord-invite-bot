@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType } = require('discord.js');
 const Database = require('./database');
 const CommandHandler = require('./commands/commandHandler');
 require('dotenv').config();
@@ -18,8 +18,8 @@ const db = new Database();
 // Command handler
 const commandHandler = new CommandHandler(client, db);
 
-// Store custom invite codes that are waiting to be used
-const pendingInvites = new Map(); // guildId -> Set of invite codes
+// Store pending verifications (userId -> { guildId, createdAt })
+const pendingVerifications = new Map();
 
 client.once('ready', async () => {
   console.log(`✅ Bot logged in as ${client.user.tag}`);
@@ -36,86 +36,148 @@ client.once('ready', async () => {
   }
 
   // Set bot status
-  client.user.setActivity('custom invites | /help', { type: 'WATCHING' });
+  client.user.setActivity('invites | /help', { type: 'WATCHING' });
 });
 
 client.on('guildMemberAdd', async (member) => {
   try {
     const guild = member.guild;
-    console.log(`\n👤 ${member.user.tag} joined the server!`);
+    console.log(`\n👤 ${member.user.tag} joined ${guild.name}!`);
     
-    // Get all custom invites for this guild
-    const customInvites = await guild.invites.fetch();
-    
-    let usedInvite = null;
-    let creatorId = null;
+    // Send DM to new member asking for invite code
+    try {
+      const embed = new EmbedBuilder()
+        .setColor('#00ffff')
+        .setTitle('👋 Welcome to ' + guild.name + '!')
+        .setDescription('Which invite link did you use to join?')
+        .addFields(
+          { name: '📝 How to verify', value: 'Reply with your invite code (e.g., `WYZEN-ABC123`)', inline: false },
+          { name: '💡 Tip', value: 'The code was given to you by the person who invited you', inline: false }
+        )
+        .setFooter({ text: 'You have 5 minutes to respond' })
+        .setTimestamp();
 
-    // Check each custom invite to see if it was used
-    for (const [code, invite] of customInvites) {
-      // Check if this invite code matches a custom invite pattern
-      const creator = db.getInviteCreator(code);
+      await member.send({ embeds: [embed] });
       
-      if (creator) {
-        // This is one of our custom invites
-        usedInvite = code;
-        creatorId = creator;
-        console.log(`✅ Found custom invite: ${code} (creator: ${creatorId})`);
-        break;
-      }
-    }
+      // Store pending verification
+      pendingVerifications.set(member.id, {
+        guildId: guild.id,
+        createdAt: Date.now()
+      });
 
-    if (usedInvite && creatorId) {
-      // Record the invite use
-      await db.recordInviteUse(guild.id, usedInvite, member.id);
-      
-      // Get creator's invite count
-      const inviteCount = await db.getInviteCount(guild.id, creatorId);
-      console.log(`📈 ${creatorId} now has ${inviteCount} invites`);
-      
-      // Check if they reached a reward milestone
-      const rewards = await db.getRewardsForMilestone(guild.id, inviteCount);
-      
-      if (rewards.length > 0) {
-        console.log(`🎁 Checking rewards for ${inviteCount} invites...`);
-        // Apply rewards
-        for (const reward of rewards) {
-          if (reward.type === 'role') {
-            try {
-              const role = await guild.roles.fetch(reward.value);
-              if (role) {
-                const creatorMember = await guild.members.fetch(creatorId);
-                await creatorMember.roles.add(role);
-                console.log(`✅ Gave role ${role.name} to ${creatorId}`);
-                
-                // Notify creator
-                const creator = await client.users.fetch(creatorId);
-                const embed = new EmbedBuilder()
-                  .setColor('#00ff00')
-                  .setTitle('🎉 Reward Unlocked!')
-                  .setDescription(`You've reached **${inviteCount} invites**!`)
-                  .addFields(
-                    { name: 'Reward', value: `Role: ${role.name}`, inline: false },
-                    { name: 'New Member', value: `${member.user.username}`, inline: false }
-                  )
-                  .setTimestamp();
-                
-                try {
-                  await creator.send({ embeds: [embed] });
-                } catch (e) {
-                  console.log(`Could not DM creator`);
-                }
-              }
-            } catch (error) {
-              console.error(`Failed to apply role reward:`, error.message);
-            }
-          }
-        }
-      }
-    } else {
-      console.log(`❓ No custom invite detected for ${member.user.tag}`);
+      console.log(`📧 Sent verification DM to ${member.user.tag}`);
+    } catch (error) {
+      console.error(`Could not send DM to ${member.user.tag}:`, error.message);
     }
   } catch (error) {
     console.error('Error in guildMemberAdd:', error);
+  }
+});
+
+client.on('messageCreate', async (message) => {
+  try {
+    // Only handle DMs
+    if (message.channel.type !== ChannelType.DM) return;
+    
+    // Ignore bot messages
+    if (message.author.bot) return;
+
+    const userId = message.author.id;
+    const code = message.content.trim().toUpperCase();
+
+    // Check if user has a pending verification
+    const pending = pendingVerifications.get(userId);
+    if (!pending) return;
+
+    // Check if code is valid format
+    if (code.length < 5 || !code.includes('-')) {
+      await message.reply('❌ Invalid code format. Please use the format: `WYZEN-ABC123`');
+      return;
+    }
+
+    // Check if verification has expired (5 minutes)
+    if (Date.now() - pending.createdAt > 5 * 60 * 1000) {
+      pendingVerifications.delete(userId);
+      await message.reply('⏰ Verification expired. Please rejoin the server to get a new code.');
+      return;
+    }
+
+    // Look up the invite code
+    const inviteData = db.getInviteByCode(code);
+
+    if (!inviteData) {
+      await message.reply('❌ That code doesn\'t exist. Make sure you copied it correctly!');
+      return;
+    }
+
+    // Check if code is for the right guild
+    if (inviteData.guild_id !== pending.guildId) {
+      await message.reply('❌ That code is for a different server!');
+      return;
+    }
+
+    // Check if user already verified with this code
+    const existingVerification = db.getVerificationByUserAndCode(pending.guildId, userId, code);
+    if (existingVerification) {
+      await message.reply('⚠️ You\'ve already verified with this code!');
+      return;
+    }
+
+    // Record the verification
+    await db.recordVerification(pending.guildId, userId, inviteData.creator_id, code);
+    pendingVerifications.delete(userId);
+
+    // Get the inviter's new count
+    const inviteCount = await db.getInviteCount(pending.guildId, inviteData.creator_id);
+
+    // Send success message
+    const successEmbed = new EmbedBuilder()
+      .setColor('#00ff00')
+      .setTitle('✅ Verified!')
+      .setDescription(`Thanks for joining! **${inviteData.creator_id}** now has **${inviteCount}** invite(s)!`)
+      .setTimestamp();
+
+    await message.reply({ embeds: [successEmbed] });
+
+    // Check for rewards
+    const rewards = await db.getRewardsForMilestone(pending.guildId, inviteCount);
+
+    if (rewards.length > 0) {
+      try {
+        const guild = client.guilds.cache.get(pending.guildId);
+        const inviter = await guild.members.fetch(inviteData.creator_id);
+        
+        for (const reward of rewards) {
+          if (reward.type === 'role') {
+            const role = await guild.roles.fetch(reward.value);
+            if (role && !inviter.roles.cache.has(role.id)) {
+              await inviter.roles.add(role);
+              
+              // Notify inviter
+              const rewardEmbed = new EmbedBuilder()
+                .setColor('#00ff00')
+                .setTitle('🎉 Reward Unlocked!')
+                .setDescription(`You've reached **${inviteCount} invites**!`)
+                .addFields(
+                  { name: 'Reward', value: `Role: ${role.name}`, inline: false },
+                  { name: 'New Member', value: `${message.author.username}`, inline: false }
+                )
+                .setTimestamp();
+
+              try {
+                await inviter.user.send({ embeds: [rewardEmbed] });
+              } catch (e) {
+                console.log(`Could not DM inviter`);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error applying rewards:', error);
+      }
+    }
+  } catch (error) {
+    console.error('Error in messageCreate:', error);
   }
 });
 
@@ -153,7 +215,6 @@ client.on('guildCreate', async (guild) => {
 // Handle guild leave
 client.on('guildDelete', (guild) => {
   console.log(`❌ Left guild: ${guild.name}`);
-  pendingInvites.delete(guild.id);
 });
 
 // Login to Discord
