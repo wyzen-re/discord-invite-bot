@@ -24,15 +24,18 @@ const guildInvites = new Map();
 
 client.once('ready', async () => {
   console.log(`✅ Bot logged in as ${client.user.tag}`);
+  console.log(`📍 Bot is in ${client.guilds.cache.size} guild(s)`);
   
   // Initialize invites for all guilds
   for (const guild of client.guilds.cache.values()) {
     try {
+      console.log(`🔍 Attempting to fetch invites for ${guild.name}...`);
       const invites = await guild.invites.fetch();
       guildInvites.set(guild.id, new Map(invites.map(inv => [inv.code, inv.uses])));
       console.log(`📊 Cached ${invites.size} invites for ${guild.name}`);
     } catch (error) {
-      console.error(`Failed to fetch invites for ${guild.name}:`, error.message);
+      console.error(`❌ Failed to fetch invites for ${guild.name}:`, error.message);
+      console.error(`   Make sure bot has 'Manage Guild' permission!`);
     }
   }
 
