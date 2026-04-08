@@ -13,8 +13,10 @@ module.exports = {
     const guild = interaction.guild;
 
     try {
-      // Check if user is admin
-      if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      // Check if user is admin using the correct method for Discord.js v14
+      const hasAdminPermission = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
+      
+      if (!hasAdminPermission) {
         await interaction.editReply({
           content: '❌ You need Administrator permissions to use this command',
           ephemeral: true
