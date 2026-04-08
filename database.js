@@ -10,16 +10,28 @@ class InviteDatabase {
   }
 
   initialize() {
-    // Invites table
+    // Custom invites table
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS invites (
+      CREATE TABLE IF NOT EXISTS custom_invites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         guild_id TEXT NOT NULL,
-        inviter_id TEXT NOT NULL,
+        creator_id TEXT NOT NULL,
+        invite_code TEXT UNIQUE NOT NULL,
+        discord_invite_url TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(guild_id, invite_code)
+      )
+    `);
+
+    // Invite uses table (tracks who used each invite)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS invite_uses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        invite_code TEXT NOT NULL,
         invited_user_id TEXT NOT NULL,
-        invite_code TEXT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(guild_id, inviter_id, invited_user_id)
+        FOREIGN KEY(invite_code) REFERENCES custom_invites(invite_code)
       )
     `);
 
@@ -63,30 +75,48 @@ class InviteDatabase {
   }
 
   /**
-   * Add an invite record
+   * Create a custom invite
    */
-  addInvite(guildId, inviterId, invitedUserId, inviteCode) {
+  createCustomInvite(guildId, creatorId, inviteCode, discordUrl) {
     try {
       const stmt = this.db.prepare(
-        `INSERT OR IGNORE INTO invites (guild_id, inviter_id, invited_user_id, invite_code)
+        `INSERT INTO custom_invites (guild_id, creator_id, invite_code, discord_invite_url)
          VALUES (?, ?, ?, ?)`
       );
-      stmt.run(guildId, inviterId, invitedUserId, inviteCode);
+      stmt.run(guildId, creatorId, inviteCode, discordUrl);
       return true;
     } catch (error) {
-      console.error('Error adding invite:', error);
+      console.error('Error creating custom invite:', error);
       throw error;
     }
   }
 
   /**
-   * Get total invite count for a user
+   * Record an invite use
+   */
+  recordInviteUse(guildId, inviteCode, invitedUserId) {
+    try {
+      const stmt = this.db.prepare(
+        `INSERT INTO invite_uses (guild_id, invite_code, invited_user_id)
+         VALUES (?, ?, ?)`
+      );
+      stmt.run(guildId, inviteCode, invitedUserId);
+      return true;
+    } catch (error) {
+      console.error('Error recording invite use:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get invite count for a user (by creator_id)
    */
   getInviteCount(guildId, userId) {
     try {
       const stmt = this.db.prepare(
-        `SELECT COUNT(*) as count FROM invites 
-         WHERE guild_id = ? AND inviter_id = ?`
+        `SELECT COUNT(*) as count FROM invite_uses iu
+         JOIN custom_invites ci ON iu.invite_code = ci.invite_code
+         WHERE iu.guild_id = ? AND ci.creator_id = ?`
       );
       const result = stmt.get(guildId, userId);
       return result?.count || 0;
@@ -102,13 +132,31 @@ class InviteDatabase {
   getUserInvites(guildId, userId) {
     try {
       const stmt = this.db.prepare(
-        `SELECT invited_user_id, timestamp FROM invites 
-         WHERE guild_id = ? AND inviter_id = ?
-         ORDER BY timestamp DESC`
+        `SELECT iu.invited_user_id, iu.timestamp, ci.invite_code FROM invite_uses iu
+         JOIN custom_invites ci ON iu.invite_code = ci.invite_code
+         WHERE iu.guild_id = ? AND ci.creator_id = ?
+         ORDER BY iu.timestamp DESC`
       );
       return stmt.all(guildId, userId) || [];
     } catch (error) {
       console.error('Error getting user invites:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get all custom invites for a user
+   */
+  getUserCustomInvites(guildId, userId) {
+    try {
+      const stmt = this.db.prepare(
+        `SELECT invite_code, discord_invite_url, created_at FROM custom_invites
+         WHERE guild_id = ? AND creator_id = ?
+         ORDER BY created_at DESC`
+      );
+      return stmt.all(guildId, userId) || [];
+    } catch (error) {
+      console.error('Error getting user custom invites:', error);
       throw error;
     }
   }
@@ -119,16 +167,33 @@ class InviteDatabase {
   getLeaderboard(guildId, limit = 10) {
     try {
       const stmt = this.db.prepare(
-        `SELECT inviter_id, COUNT(*) as invite_count 
-         FROM invites 
-         WHERE guild_id = ? 
-         GROUP BY inviter_id 
+        `SELECT ci.creator_id, COUNT(*) as invite_count 
+         FROM invite_uses iu
+         JOIN custom_invites ci ON iu.invite_code = ci.invite_code
+         WHERE iu.guild_id = ? 
+         GROUP BY ci.creator_id 
          ORDER BY invite_count DESC 
          LIMIT ?`
       );
       return stmt.all(guildId, limit) || [];
     } catch (error) {
       console.error('Error getting leaderboard:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get invite creator by code
+   */
+  getInviteCreator(inviteCode) {
+    try {
+      const stmt = this.db.prepare(
+        `SELECT creator_id FROM custom_invites WHERE invite_code = ?`
+      );
+      const result = stmt.get(inviteCode);
+      return result?.creator_id || null;
+    } catch (error) {
+      console.error('Error getting invite creator:', error);
       throw error;
     }
   }

@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder, AuditLogEvent } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const Database = require('./database');
 const CommandHandler = require('./commands/commandHandler');
 require('dotenv').config();
@@ -18,6 +18,9 @@ const db = new Database();
 // Command handler
 const commandHandler = new CommandHandler(client, db);
 
+// Store custom invite codes that are waiting to be used
+const pendingInvites = new Map(); // guildId -> Set of invite codes
+
 client.once('ready', async () => {
   console.log(`✅ Bot logged in as ${client.user.tag}`);
   console.log(`📍 Bot is in ${client.guilds.cache.size} guild(s)`);
@@ -33,73 +36,59 @@ client.once('ready', async () => {
   }
 
   // Set bot status
-  client.user.setActivity('invites | /help', { type: 'WATCHING' });
+  client.user.setActivity('custom invites | /help', { type: 'WATCHING' });
 });
 
 client.on('guildMemberAdd', async (member) => {
   try {
     const guild = member.guild;
+    console.log(`\n👤 ${member.user.tag} joined the server!`);
     
-    // Check if bot has permission to view audit logs
-    if (!guild.members.me.permissions.has('ViewAuditLog')) {
-      console.warn(`⚠️ No permission to view audit log in ${guild.name}`);
-      return;
-    }
+    // Get all custom invites for this guild
+    const customInvites = await guild.invites.fetch();
+    
+    let usedInvite = null;
+    let creatorId = null;
 
-    // Fetch recent audit logs for member joins
-    const auditLogs = await guild.fetchAuditLogs({
-      limit: 10,
-      type: AuditLogEvent.MemberUpdate,
-    });
-
-    let inviter = null;
-
-    // Look through audit logs to find who invited this member
-    for (const log of auditLogs.entries.values()) {
-      // Check if this is a member join event
-      if (log.targetId === member.id && log.createdTimestamp > Date.now() - 5000) {
-        // The executor is the inviter
-        inviter = log.executor;
+    // Check each custom invite to see if it was used
+    for (const [code, invite] of customInvites) {
+      // Check if this invite code matches a custom invite pattern
+      const creator = db.getInviteCreator(code);
+      
+      if (creator) {
+        // This is one of our custom invites
+        usedInvite = code;
+        creatorId = creator;
+        console.log(`✅ Found custom invite: ${code} (creator: ${creatorId})`);
         break;
       }
     }
 
-    // If not found in member updates, try checking the member's join event
-    if (!inviter) {
-      const joinLogs = await guild.fetchAuditLogs({
-        limit: 5,
-        type: AuditLogEvent.MemberUpdate,
-      });
-
-      for (const log of joinLogs.entries.values()) {
-        if (log.targetId === member.id) {
-          inviter = log.executor;
-          break;
-        }
-      }
-    }
-
-    if (inviter && inviter.id !== client.user.id) {
-      // Track the invite
-      await db.addInvite(guild.id, inviter.id, member.id, 'audit-log');
+    if (usedInvite && creatorId) {
+      // Record the invite use
+      await db.recordInviteUse(guild.id, usedInvite, member.id);
       
-      // Get inviter's invite count
-      const inviteCount = await db.getInviteCount(guild.id, inviter.id);
+      // Get creator's invite count
+      const inviteCount = await db.getInviteCount(guild.id, creatorId);
+      console.log(`📈 ${creatorId} now has ${inviteCount} invites`);
       
       // Check if they reached a reward milestone
       const rewards = await db.getRewardsForMilestone(guild.id, inviteCount);
       
       if (rewards.length > 0) {
+        console.log(`🎁 Checking rewards for ${inviteCount} invites...`);
         // Apply rewards
         for (const reward of rewards) {
           if (reward.type === 'role') {
             try {
               const role = await guild.roles.fetch(reward.value);
               if (role) {
-                const inviterMember = await guild.members.fetch(inviter.id);
-                await inviterMember.roles.add(role);
+                const creatorMember = await guild.members.fetch(creatorId);
+                await creatorMember.roles.add(role);
+                console.log(`✅ Gave role ${role.name} to ${creatorId}`);
                 
-                // Notify inviter
+                // Notify creator
+                const creator = await client.users.fetch(creatorId);
                 const embed = new EmbedBuilder()
                   .setColor('#00ff00')
                   .setTitle('🎉 Reward Unlocked!')
@@ -111,9 +100,9 @@ client.on('guildMemberAdd', async (member) => {
                   .setTimestamp();
                 
                 try {
-                  await inviter.send({ embeds: [embed] });
+                  await creator.send({ embeds: [embed] });
                 } catch (e) {
-                  console.log(`Could not DM ${inviter.tag}`);
+                  console.log(`Could not DM creator`);
                 }
               }
             } catch (error) {
@@ -122,10 +111,8 @@ client.on('guildMemberAdd', async (member) => {
           }
         }
       }
-
-      console.log(`📈 ${inviter.tag} now has ${inviteCount} invites (${member.user.tag} joined)`);
     } else {
-      console.log(`❓ Could not determine inviter for ${member.user.tag}`);
+      console.log(`❓ No custom invite detected for ${member.user.tag}`);
     }
   } catch (error) {
     console.error('Error in guildMemberAdd:', error);
@@ -166,6 +153,7 @@ client.on('guildCreate', async (guild) => {
 // Handle guild leave
 client.on('guildDelete', (guild) => {
   console.log(`❌ Left guild: ${guild.name}`);
+  pendingInvites.delete(guild.id);
 });
 
 // Login to Discord
