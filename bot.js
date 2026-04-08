@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, Collection, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, AuditLogEvent } = require('discord.js');
 const Database = require('./database');
 const CommandHandler = require('./commands/commandHandler');
 require('dotenv').config();
@@ -7,7 +7,6 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildInvites,
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.MessageContent,
   ],
@@ -19,23 +18,17 @@ const db = new Database();
 // Command handler
 const commandHandler = new CommandHandler(client, db);
 
-// Store invites for tracking
-const guildInvites = new Map();
-
 client.once('ready', async () => {
   console.log(`✅ Bot logged in as ${client.user.tag}`);
   console.log(`📍 Bot is in ${client.guilds.cache.size} guild(s)`);
   
-  // Initialize invites for all guilds
+  // Initialize database for all guilds
   for (const guild of client.guilds.cache.values()) {
     try {
-      console.log(`🔍 Attempting to fetch invites for ${guild.name}...`);
-      const invites = await guild.invites.fetch();
-      guildInvites.set(guild.id, new Map(invites.map(inv => [inv.code, inv.uses])));
-      console.log(`📊 Cached ${invites.size} invites for ${guild.name}`);
+      await db.initializeGuild(guild.id);
+      console.log(`📊 Initialized database for ${guild.name}`);
     } catch (error) {
-      console.error(`❌ Failed to fetch invites for ${guild.name}:`, error.message);
-      console.error(`   Make sure bot has 'Manage Guild' permission!`);
+      console.error(`Failed to initialize guild ${guild.name}:`, error.message);
     }
   }
 
@@ -46,29 +39,49 @@ client.once('ready', async () => {
 client.on('guildMemberAdd', async (member) => {
   try {
     const guild = member.guild;
-    const newInvites = await guild.invites.fetch();
-    const oldInvites = guildInvites.get(guild.id) || new Map();
+    
+    // Check if bot has permission to view audit logs
+    if (!guild.members.me.permissions.has('ViewAuditLog')) {
+      console.warn(`⚠️ No permission to view audit log in ${guild.name}`);
+      return;
+    }
 
-    let usedInvite = null;
+    // Fetch recent audit logs for member joins
+    const auditLogs = await guild.fetchAuditLogs({
+      limit: 10,
+      type: AuditLogEvent.MemberUpdate,
+    });
+
     let inviter = null;
 
-    // Find which invite was used
-    for (const [code, uses] of newInvites) {
-      const oldUses = oldInvites.get(code) || 0;
-      if (uses > oldUses) {
-        usedInvite = code;
-        const invite = newInvites.get(code);
-        inviter = invite.inviter;
+    // Look through audit logs to find who invited this member
+    for (const log of auditLogs.entries.values()) {
+      // Check if this is a member join event
+      if (log.targetId === member.id && log.createdTimestamp > Date.now() - 5000) {
+        // The executor is the inviter
+        inviter = log.executor;
         break;
       }
     }
 
-    // Update cache
-    guildInvites.set(guild.id, new Map(newInvites.map(inv => [inv.code, inv.uses])));
+    // If not found in member updates, try checking the member's join event
+    if (!inviter) {
+      const joinLogs = await guild.fetchAuditLogs({
+        limit: 5,
+        type: AuditLogEvent.MemberUpdate,
+      });
 
-    if (inviter) {
+      for (const log of joinLogs.entries.values()) {
+        if (log.targetId === member.id) {
+          inviter = log.executor;
+          break;
+        }
+      }
+    }
+
+    if (inviter && inviter.id !== client.user.id) {
       // Track the invite
-      await db.addInvite(guild.id, inviter.id, member.id, usedInvite);
+      await db.addInvite(guild.id, inviter.id, member.id, 'audit-log');
       
       // Get inviter's invite count
       const inviteCount = await db.getInviteCount(guild.id, inviter.id);
@@ -83,7 +96,8 @@ client.on('guildMemberAdd', async (member) => {
             try {
               const role = await guild.roles.fetch(reward.value);
               if (role) {
-                await member.guild.members.fetch(inviter.id).then(m => m.roles.add(role));
+                const inviterMember = await guild.members.fetch(inviter.id);
+                await inviterMember.roles.add(role);
                 
                 // Notify inviter
                 const embed = new EmbedBuilder()
@@ -91,7 +105,8 @@ client.on('guildMemberAdd', async (member) => {
                   .setTitle('🎉 Reward Unlocked!')
                   .setDescription(`You've reached **${inviteCount} invites**!`)
                   .addFields(
-                    { name: 'Reward', value: `Role: ${role.name}`, inline: false }
+                    { name: 'Reward', value: `Role: ${role.name}`, inline: false },
+                    { name: 'New Member', value: `${member.user.username}`, inline: false }
                   )
                   .setTimestamp();
                 
@@ -146,20 +161,11 @@ client.on('guildCreate', async (guild) => {
   
   // Initialize database for this guild
   await db.initializeGuild(guild.id);
-  
-  // Fetch initial invites
-  try {
-    const invites = await guild.invites.fetch();
-    guildInvites.set(guild.id, new Map(invites.map(inv => [inv.code, inv.uses])));
-  } catch (error) {
-    console.error(`Failed to fetch invites for new guild:`, error.message);
-  }
 });
 
 // Handle guild leave
 client.on('guildDelete', (guild) => {
   console.log(`❌ Left guild: ${guild.name}`);
-  guildInvites.delete(guild.id);
 });
 
 // Login to Discord
