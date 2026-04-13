@@ -11,6 +11,7 @@ module.exports = {
     const guildId = interaction.guildId;
 
     try {
+      // Fetch fresh analytics data every time
       const analytics = await db.getGuildAnalytics(guildId);
       const { discovery, retention } = analytics;
 
@@ -36,7 +37,7 @@ module.exports = {
           const barLength = Math.round((method.count / totalDiscoveries) * 20);
           const bar = '█'.repeat(barLength) + '░'.repeat(20 - barLength);
           
-          discoveryBreakdown += `${label}\n${bar} ${percentage}% (${method.count})\n\n`;
+          discoveryBreakdown += `${label}\n\`${bar}\` ${percentage}% (\`${method.count}\`)\n\n`;
         }
       }
 
@@ -56,11 +57,11 @@ module.exports = {
           },
           {
             name: '👥 Member Retention',
-            value: `Total Members: **${retention.total_members}**\nActive: **${retention.active_members}** ✅\nLeft: **${retention.left_members}** ❌\nRetention Rate: **${retentionPercentage}%**`,
+            value: `\`\`\`\nTotal Members: ${retention.total_members}\nActive: ${retention.active_members} ✅\nLeft: ${retention.left_members} ❌\nRetention Rate: ${retentionPercentage}%\n\`\`\``,
             inline: false
           }
         )
-        .setFooter({ text: 'Analytics updated in real-time' })
+        .setFooter({ text: '🔄 Real-time analytics | Updates every 5 minutes' })
         .setTimestamp();
 
       await interaction.editReply({ embeds: [embed] });

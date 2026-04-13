@@ -21,6 +21,7 @@ module.exports = {
     const guild = interaction.guild;
 
     try {
+      // Fetch fresh leaderboard data every time
       const leaderboard = await db.getLeaderboard(guildId, limit);
 
       if (leaderboard.length === 0) {
@@ -38,14 +39,19 @@ module.exports = {
         const username = user?.user.username || 'Unknown User';
         
         const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
-        description += `${medal} **${username}**\n   Total: ${entry.total} | Stayed: ${entry.stayed} | Left: ${entry.left}\n`;
+        const retentionPercentage = entry.total > 0 
+          ? ((entry.stayed / entry.total) * 100).toFixed(1)
+          : 0;
+        
+        description += `${medal} **${username}**\n`;
+        description += `   📈 Total: \`${entry.total}\` | ✅ Stayed: \`${entry.stayed}\` | ❌ Left: \`${entry.left}\` | 📊 ${retentionPercentage}%\n\n`;
       }
 
       const embed = new EmbedBuilder()
         .setColor('#ff00ff')
         .setTitle('🏆 Invite Leaderboard')
         .setDescription(description)
-        .setFooter({ text: `Showing top ${limit} inviters` })
+        .setFooter({ text: `Showing top ${limit} inviters | 🔄 Real-time data` })
         .setTimestamp();
 
       await interaction.editReply({ embeds: [embed] });

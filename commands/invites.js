@@ -18,34 +18,41 @@ module.exports = {
     const guildId = interaction.guildId;
 
     try {
+      // Fetch fresh stats every time
       const stats = await db.getInviterStats(guildId, targetUser.id);
+      
+      // Calculate retention percentage
+      const retentionPercentage = stats.total > 0 
+        ? ((stats.stayed / stats.total) * 100).toFixed(1)
+        : 0;
 
       const embed = new EmbedBuilder()
         .setColor('#00ffff')
-        .setTitle(`📊 Invite Statistics`)
+        .setTitle(`📊 Invite Statistics for ${targetUser.username}`)
         .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
         .addFields(
           { 
-            name: 'User', 
-            value: `${targetUser.username}`, 
-            inline: false 
-          },
-          { 
-            name: 'Total', 
-            value: `**${stats.total || 0}**`, 
+            name: '📈 Total Invites', 
+            value: `\`\`\`${stats.total || 0}\`\`\``, 
             inline: true 
           },
           { 
-            name: 'Stayed', 
-            value: `**${stats.stayed || 0}**`, 
+            name: '✅ Stayed', 
+            value: `\`\`\`${stats.stayed || 0}\`\`\``, 
             inline: true 
           },
           { 
-            name: 'Left', 
-            value: `**${stats.left || 0}**`, 
+            name: '❌ Left', 
+            value: `\`\`\`${stats.left || 0}\`\`\``, 
             inline: true 
+          },
+          {
+            name: '📊 Retention Rate',
+            value: `\`\`\`${retentionPercentage}%\`\`\``,
+            inline: false
           }
         )
+        .setFooter({ text: '🔄 Data updates in real-time' })
         .setTimestamp();
 
       await interaction.editReply({ embeds: [embed] });

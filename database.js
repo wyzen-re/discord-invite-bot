@@ -434,6 +434,22 @@ class InviteDatabase {
   }
 
   /**
+   * Get all tracked members for a guild
+   */
+  getAllTrackedMembers(guildId) {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT user_id, status FROM member_tracking
+        WHERE guild_id = ?
+      `);
+      return stmt.all(guildId) || [];
+    } catch (error) {
+      console.error('Error getting all tracked members:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Close database connection
    */
   close() {

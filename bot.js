@@ -21,6 +21,29 @@ const commandHandler = new CommandHandler(client, db);
 // Store pending surveys (userId -> { guildId, createdAt })
 const pendingSurveys = new Map();
 
+// Background job: Sync member presence every 5 minutes
+const syncMemberPresence = async () => {
+  try {
+    for (const guild of client.guilds.cache.values()) {
+      const members = await guild.members.fetch();
+      const memberIds = new Set(members.keys());
+      
+      // Get all tracked members for this guild
+      const trackedMembers = db.getAllTrackedMembers(guild.id);
+      
+      // Check for members who left
+      for (const tracked of trackedMembers) {
+        if (!memberIds.has(tracked.user_id) && tracked.status === 'active') {
+          await db.trackMemberLeave(guild.id, tracked.user_id);
+          console.log(`🔄 Synced: ${tracked.user_id} marked as left`);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error syncing member presence:', error);
+  }
+};
+
 client.once('ready', async () => {
   console.log(`✅ Bot logged in as ${client.user.tag}`);
   console.log(`📍 Bot is in ${client.guilds.cache.size} guild(s)`);
@@ -37,6 +60,13 @@ client.once('ready', async () => {
 
   // Set bot status
   client.user.setActivity('invites | /help', { type: 'WATCHING' });
+  
+  // Start background sync job (every 5 minutes)
+  setInterval(syncMemberPresence, 5 * 60 * 1000);
+  console.log('🔄 Background member sync started (every 5 minutes)');
+  
+  // Run initial sync
+  await syncMemberPresence();
 });
 
 client.on('guildMemberAdd', async (member) => {
